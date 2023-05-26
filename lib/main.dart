@@ -51,9 +51,6 @@ class BooksScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     debugLog("BooksScreen | build() | invoked");
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Books'),
-      ),
       body: ListView(
         children: books
             .map(
@@ -89,7 +86,7 @@ class BookDetailsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     debugLog("BookDetailsScreen | build() | invoked");
-    final loadState = ref.watch(bluetoothControllerProvider);
+    final loadState = ref.watch(bluetoothStateControllerProvider);
     return Scaffold(
       appBar: AppBar(
         title: Text(book['title']!),
@@ -110,16 +107,9 @@ class BookDetailsScreen extends ConsumerWidget {
 class BluetoothScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(bluetoothControllerProvider);
+    final state = ref.watch(bluetoothStateControllerProvider);
+
     return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back),
-          onPressed: () => context.beamToNamed(
-              ref.read(navigationStateControllerProvider).lastLocation),
-        ),
-        title: Text('Bluetooth Screen'),
-      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -129,15 +119,13 @@ class BluetoothScreen extends ConsumerWidget {
             ),
             ElevatedButton(
               onPressed: () async => await ref
-                  .read(bluetoothControllerProvider.notifier)
+                  .read(bluetoothStateControllerProvider.notifier)
                   .connect(),
               child: Text('CONNECT'),
             ),
             ElevatedButton(
-              onPressed: () async => await ref
-                  .read(bluetoothControllerProvider.notifier)
-                  .disconnect(),
-              child: Text('DISCONNECT'),
+              onPressed: () => context.beamToNamed('/home/books'),
+              child: Text('Go Back'),
             ),
           ],
         ),
@@ -201,7 +189,7 @@ class LoginScreen extends ConsumerWidget {
     debugLog("LoginScreen | build() | "
         "signedIn provider state before returning a Scaffold: $signedIn");
 
-    final bleState = ref.watch(bluetoothControllerProvider);
+    final bleState = ref.watch(bluetoothStateControllerProvider);
 
     return Scaffold(
       body: Center(
@@ -211,8 +199,9 @@ class LoginScreen extends ConsumerWidget {
             Text(ref.watch(authStateControllerProvider).toString()),
             Text(bleState.toString()),
             ElevatedButton(
-                onPressed: () =>
-                    ref.read(bluetoothControllerProvider.notifier).connect(),
+                onPressed: () => ref
+                    .read(bluetoothStateControllerProvider.notifier)
+                    .connect(),
                 child: Text('CONNECT')),
             ElevatedButton(
               onPressed: () async {
@@ -340,7 +329,6 @@ class ArticlesLocation extends BeamLocation<BeamState> {
 }
 
 // REPOSITORIES
-//* Changed to Future
 class AuthRepository {
   const AuthRepository(this.sharedPreferences);
   final SharedPreferences sharedPreferences;
@@ -363,7 +351,6 @@ class AuthRepository {
   }
 }
 
-// ? Maybe good strategy
 class NavigationStateRepository {
   const NavigationStateRepository(this.sharedPreferences);
   final SharedPreferences sharedPreferences;
@@ -418,16 +405,18 @@ class BluetoothRepository {
 }
 
 // CONTROLLERS
-// * Changed to StateNotifier
 class AuthStateController extends StateNotifier<AuthState> {
   final RefreshListenable refreshListenable;
   AuthStateController(Ref ref, this.refreshListenable)
       : repo = ref.read(authRepositoryProvider),
+        bluetoothController =
+            ref.read(bluetoothStateControllerProvider.notifier),
         super(AuthState.loading()) {
     checkUserAuth();
   }
 
   AuthRepository repo;
+  BluetoothController bluetoothController;
 
   Future<void> checkUserAuth() async {
     state = AuthState.loading();
@@ -435,9 +424,7 @@ class AuthStateController extends StateNotifier<AuthState> {
     result == true
         ? state = AuthState.authenticated()
         : state = AuthState.unauthenticated();
-    log('REFRESHING LISTENABLE');
     refreshListenable.refresh();
-    log('REFRESHED LISTENABLE | New State $state');
   }
 
   Future<void> signIn() async {
@@ -457,6 +444,7 @@ class AuthStateController extends StateNotifier<AuthState> {
         "signedIn state before toggle: $state");
     state = AuthState.loading();
     final result = await repo.signOutUser();
+    await bluetoothController.disconnect();
     result == true
         ? state = AuthState.authenticated()
         : state = AuthState.unauthenticated();
@@ -481,21 +469,6 @@ class AuthState extends Equatable {
 
   @override
   List<Object?> get props => [status];
-}
-
-class NavigationState {
-  const NavigationState(
-      this.booksLocation, this.articlesLocation, this.lastLocation);
-  final String booksLocation;
-  final String articlesLocation;
-  final String lastLocation;
-
-  String toString() {
-    return "NavigationState("
-        "booksLocation: $booksLocation, "
-        "articlesLocation: $articlesLocation, "
-        "lastLocation: $lastLocation)";
-  }
 }
 
 class BluetoothController extends StateNotifier<BluetoothState> {
@@ -529,7 +502,7 @@ class BluetoothController extends StateNotifier<BluetoothState> {
 
   Future<void> disconnect() async {
     state = BluetoothState.loading();
-    loadStreamSubscription?.cancel();
+    await loadStreamSubscription?.cancel();
     await Future.delayed(Duration(seconds: 2));
     state = BluetoothState.disconnected();
   }
@@ -539,6 +512,8 @@ class BluetoothState {
   final int load;
   final int code;
   const BluetoothState._({this.load = -1, this.code = -1});
+
+  // TODO  update these for checks (ex. state == BluetoothState.connected)
 
   const BluetoothState.loading() : this._(code: 1);
   const BluetoothState.disconnected() : this._(code: 2);
@@ -552,7 +527,7 @@ class BluetoothState {
     } else if (this.code == 2) {
       return 'Disconnected';
     } else if (this.code == 3) {
-      return 'Connected';
+      return 'Connected... Fetching Data Stream';
     } else if (this.code == 4) {
       return 'Streaming: $load';
     } else {
@@ -561,7 +536,6 @@ class BluetoothState {
   }
 }
 
-// Sync so it can be Notifier. Pro of SharedPreferences
 class NavigationStateController extends Notifier<NavigationState> {
   @override
   NavigationState build() {
@@ -603,8 +577,87 @@ class NavigationStateController extends Notifier<NavigationState> {
   }
 }
 
+class NavigationState {
+  const NavigationState(
+      this.booksLocation, this.articlesLocation, this.lastLocation);
+  final String booksLocation;
+  final String articlesLocation;
+  final String lastLocation;
+
+  String toString() {
+    return "NavigationState("
+        "booksLocation: $booksLocation, "
+        "articlesLocation: $articlesLocation, "
+        "lastLocation: $lastLocation)";
+  }
+}
+
 // ** PROVIDERS  **
+Provider<List<BeamerDelegate>> beamerDelegatesProvider = Provider((ref) => [
+      BeamerDelegate(
+        initialPath: ref.read(navigationStateControllerProvider).booksLocation,
+        updateListenable: ref.read(bluetoothStateListenableProvider),
+        guards: [
+          // Bluetooth Guards
+          BeamGuard(
+            pathPatterns: ['/home/books/*'],
+            check: (context, location) {
+              final isStreamingLoadData = ref
+                  .read(bluetoothStateControllerProvider)
+                  .toString()
+                  .contains('Streaming');
+              return isStreamingLoadData;
+            },
+            beamToNamed: (origin, target) {
+              return '/home/bluetooth';
+            },
+          ),
+          BeamGuard(
+            pathPatterns: ['/home/bluetooth'],
+            check: (context, location) => !ref
+                .read(bluetoothStateControllerProvider)
+                .toString()
+                .contains('Streaming'),
+            beamToNamed: (origin, target) =>
+                ref.read(navigationStateControllerProvider).booksLocation,
+          ),
+        ],
+        locationBuilder: (routeInformation, _) {
+          debugLog("AppScreenState | routerDelegates[0] (books) | "
+              "locationBuilder() | "
+              "incoming routeInformation: ${routeInformation.location}");
+          BeamLocation result = NotFound(path: routeInformation.location!);
+          if (routeInformation.location!.contains('books')) {
+            result = BooksLocation(routeInformation);
+          }
+          if (routeInformation.location!.contains('bluetooth')) {
+            result = BluetoothLocation(routeInformation);
+          }
+          debugLog("AppScreenState | routerDelegates[0] (books) | "
+              "locationBuilder() | going to return: $result");
+          return result;
+        },
+      ),
+      BeamerDelegate(
+        initialPath:
+            ref.read(navigationStateControllerProvider).articlesLocation,
+        locationBuilder: (routeInformation, _) {
+          debugLog("AppScreenState | routerDelegates[1] (articles) | "
+              "locationBuilder() | "
+              "incoming routeInformation: ${routeInformation.location}");
+          BeamLocation result = NotFound(path: routeInformation.location!);
+          if (routeInformation.location!.contains('articles')) {
+            result = ArticlesLocation(routeInformation);
+          }
+          debugLog("AppScreenState | routerDelegates[1] (articles) | "
+              "locationBuilder() | going to return: $result");
+          return result;
+        },
+      ),
+    ]);
+
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  // Overriden in main()
   throw UnimplementedError();
 });
 
@@ -617,7 +670,12 @@ final bluetoothRepositoryProvider = Provider<BluetoothRepository>((ref) {
   return BluetoothRepository();
 });
 
-// * Updated to StateNotifier
+final navigationStateRepositoryProvider =
+    Provider<NavigationStateRepository>((ref) {
+  final sharedPreferences = ref.watch(sharedPreferencesProvider);
+  return NavigationStateRepository(sharedPreferences);
+});
+
 final authStateControllerProvider =
     StateNotifierProvider<AuthStateController, AuthState>((ref) {
   final authStateController =
@@ -626,7 +684,7 @@ final authStateControllerProvider =
   return authStateController;
 });
 
-final bluetoothControllerProvider =
+final bluetoothStateControllerProvider =
     StateNotifierProvider<BluetoothController, BluetoothState>((ref) {
   final bleController =
       BluetoothController(ref.read(bluetoothRepositoryProvider));
@@ -638,6 +696,10 @@ final bluetoothControllerProvider =
   return bleController;
 });
 
+final navigationStateControllerProvider =
+    NotifierProvider<NavigationStateController, NavigationState>(
+        NavigationStateController.new);
+
 Provider<RefreshListenable> bluetoothStateListenableProvider = Provider(
   (ref) => RefreshListenable(),
 );
@@ -646,24 +708,18 @@ Provider<RefreshListenable> authStateListenableProvider = Provider(
   (ref) => RefreshListenable(),
 );
 
+StateProvider<String> currentLocationProvider =
+    StateProvider<String>((ref) => 'null');
+
 class RefreshListenable extends ChangeNotifier {
   void refresh() {
     notifyListeners();
   }
 }
 
-final navigationStateRepositoryProvider =
-    Provider<NavigationStateRepository>((ref) {
-  final sharedPreferences = ref.watch(sharedPreferencesProvider);
-  return NavigationStateRepository(sharedPreferences);
-});
-
-final navigationStateControllerProvider =
-    NotifierProvider<NavigationStateController, NavigationState>(
-        NavigationStateController.new);
-
 // APP
 class AppScreen extends ConsumerStatefulWidget {
+  // Context is passed to give access to Provider in AppScreenState Constructor
   AppScreen(this.booksLocation, this.articlesLocation, this.lastLocation,
       this.context);
   final String booksLocation;
@@ -678,82 +734,9 @@ class AppScreen extends ConsumerStatefulWidget {
 
 class AppScreenState extends ConsumerState<AppScreen> {
   AppScreenState(String booksLocation, String articlesLocation,
-      String lastLocation, BuildContext context)
-      : routerDelegates = [
-          BeamerDelegate(
-            initialPath: booksLocation,
-            updateListenable: ProviderScope.containerOf(context)
-                .read(bluetoothStateListenableProvider),
-            guards: [
-              BeamGuard(
-                pathPatterns: ['/home/books/*'],
-                check: (context, location) {
-                  final isStreamingLoadData = ProviderScope.containerOf(context)
-                      .read(bluetoothControllerProvider)
-                      .toString()
-                      .contains('Streaming');
-                  return isStreamingLoadData;
-                },
-                beamToNamed: (origin, target) {
-                  return '/home/bluetooth';
-                },
-              ),
-              BeamGuard(
-                pathPatterns: ['/home/bluetooth'],
-                check: (context, location) {
-                  final streamingLoadData = ProviderScope.containerOf(context)
-                      .read(bluetoothControllerProvider)
-                      .toString()
-                      .contains('Streaming');
-
-                  log('BeamGuard | is streaming: $streamingLoadData');
-                  return !streamingLoadData;
-                },
-                beamToNamed: (origin, target) {
-                  final newLocation = ProviderScope.containerOf(context)
-                      .read(navigationStateControllerProvider)
-                      .booksLocation;
-                  log('----> Bluetooth Guard Beaming to $newLocation');
-                  return newLocation;
-                },
-              ),
-            ],
-            locationBuilder: (routeInformation, _) {
-              debugLog("AppScreenState | routerDelegates[0] (books) | "
-                  "locationBuilder() | "
-                  "incoming routeInformation: ${routeInformation.location}");
-              BeamLocation result = NotFound(path: routeInformation.location!);
-              if (routeInformation.location!.contains('books')) {
-                result = BooksLocation(routeInformation);
-              }
-              if (routeInformation.location!.contains('bluetooth')) {
-                result = BluetoothLocation(routeInformation);
-              }
-              debugLog("AppScreenState | routerDelegates[0] (books) | "
-                  "locationBuilder() | going to return: $result");
-              return result;
-            },
-          ),
-          BeamerDelegate(
-            initialPath: articlesLocation,
-            locationBuilder: (routeInformation, _) {
-              debugLog("AppScreenState | routerDelegates[1] (articles) | "
-                  "locationBuilder() | "
-                  "incoming routeInformation: ${routeInformation.location}");
-              BeamLocation result = NotFound(path: routeInformation.location!);
-              if (routeInformation.location!.contains('articles')) {
-                result = ArticlesLocation(routeInformation);
-              }
-              debugLog("AppScreenState | routerDelegates[1] (articles) | "
-                  "locationBuilder() | going to return: $result");
-              return result;
-            },
-          ),
-        ];
+      String lastLocation, BuildContext context);
 
   late int bottomNavBarIndex;
-
-  final List<BeamerDelegate> routerDelegates;
 
   // This method will be called every time the
   // Beamer.of(context) changes.
@@ -772,14 +755,16 @@ class AppScreenState extends ConsumerState<AppScreen> {
   @override
   Widget build(BuildContext context) {
     debugLog("AppScreenState | build() | invoked");
+    final routerDelegates = ref.read(beamerDelegatesProvider);
     final state = ref.watch(authStateControllerProvider);
-    final bleState = ref.watch(bluetoothControllerProvider);
-
-    log('HERE WE GOOOO: $bleState');
+    final bleState = ref.watch(bluetoothStateControllerProvider);
+    final bleController = ref.read(bluetoothStateControllerProvider.notifier);
+    final authController = ref.read(authStateControllerProvider.notifier);
+    final currentLocation = ref.watch(currentLocationProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Demo App'),
+        title: Text(currentLocation),
         leading: bleState.toString() == 'Loading'
             ? CircularProgressIndicator(
                 color: Colors.red,
@@ -790,9 +775,7 @@ class AppScreenState extends ConsumerState<AppScreen> {
                       Icons.bluetooth_connected,
                       color: Colors.green,
                     ),
-                    onPressed: () async => await ref
-                        .read(bluetoothControllerProvider.notifier)
-                        .disconnect(),
+                    onPressed: () async => await bleController.disconnect(),
                   )
                 : bleState.toString() == 'Disconnected'
                     ? IconButton(
@@ -800,29 +783,18 @@ class AppScreenState extends ConsumerState<AppScreen> {
                           Icons.bluetooth_disabled,
                           color: Colors.black,
                         ),
-                        onPressed: () => ref
-                            .read(bluetoothControllerProvider.notifier)
-                            .connect(),
+                        onPressed: () async => await bleController.connect(),
                       )
                     : IconButton(
                         icon: Icon(
                           Icons.bluetooth_connected,
                         ),
-                        onPressed: () async => await ref
-                            .read(bluetoothControllerProvider.notifier)
-                            .disconnect(),
+                        onPressed: () async => await bleController.disconnect(),
                       ),
         actions: [
           if (state == AuthState.authenticated())
             IconButton(
-              onPressed: () async {
-                final controller =
-                    ref.read(authStateControllerProvider.notifier);
-                await controller.signOut();
-                if (mounted) {
-                  Beamer.of(context).update();
-                }
-              },
+              onPressed: () async => await authController.signOut(),
               icon: const Icon(Icons.logout),
             ),
         ],
@@ -888,13 +860,13 @@ void main() async {
       container.read(navigationStateControllerProvider).lastLocation;
 
   // * Init Controller with Listenables
-  AuthStateController authStateController =
+  final authStateController =
       container.read(authStateControllerProvider.notifier);
   authStateController.addListener((state) {
     container.read(authStateListenableProvider).refresh();
   });
 
-  final routerDelegate = BeamerDelegate(
+  final mainRouterDelegate = BeamerDelegate(
     initialPath: lastInitialPath,
     locationBuilder: RoutesLocationBuilder(
       routes: {
@@ -918,6 +890,7 @@ void main() async {
 
       Future(() {
         if (location != null) {
+          container.read(currentLocationProvider.notifier).state = location;
           debugLog("routerDelegate | routeListener() | "
               "about to save location: $location");
 
@@ -951,8 +924,7 @@ void main() async {
         pathPatterns: ['/login'],
         guardNonMatching: true,
         check: (context, state) {
-          final authState = ProviderScope.containerOf(context)
-              .read(authStateControllerProvider);
+          final authState = container.read(authStateControllerProvider);
 
           debugLog("routerDelegate | "
               "BeamGuard | check() Login nonMatching| is about to retrieve signedIn state: $authState");
@@ -966,8 +938,7 @@ void main() async {
       BeamGuard(
         pathPatterns: ['/login'],
         check: (context, state) {
-          final authState = ProviderScope.containerOf(context)
-              .read(authStateControllerProvider);
+          final authState = container.read(authStateControllerProvider);
           log("routerDelegate | "
               "BeamGuard | check() Login Matching | is about to retrieve signedIn state: $authState");
           final signedIn = authState == AuthState.authenticated();
@@ -985,10 +956,10 @@ void main() async {
       container: container,
       child: MaterialApp.router(
         debugShowCheckedModeBanner: false,
-        routerDelegate: routerDelegate,
+        routerDelegate: mainRouterDelegate,
         routeInformationParser: BeamerParser(),
         backButtonDispatcher: BeamerBackButtonDispatcher(
-          delegate: routerDelegate,
+          delegate: mainRouterDelegate,
         ),
       ),
     ),
